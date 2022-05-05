@@ -38,20 +38,7 @@ IMPLEMENT_APPLICATION(ZEDLiveLinkPlugin, "ZEDLiveLink");
 using namespace sl;
 using namespace std;
 
-#define ENABLE_OBJECT_DETECTION 1
-
-
 static TSharedPtr<ILiveLinkProvider> LiveLinkProvider;
-
-struct StreamedSkeletonData
-{
-	FName SubjectName;
-	double Timestamp;
-	TArray<FTransform> Skeleton;
-
-	StreamedSkeletonData() {}
-	StreamedSkeletonData(FName inSubjectName) : SubjectName(inSubjectName) {}
-};
 
 struct StreamedCameraData
 {
@@ -66,18 +53,13 @@ void LibInit();
 void parseArgs(int argc, char** argv, SL_InitParameters& init_parameters, string& pathSVO, string& ip, int& port);
 void UpdateCameraStaticData(FName SubjectName);
 void UpdateCameraFrameData(FName SubjectName, ZEDCamera& camera);
-void UpdateSkeletonStaticData(FName SubjectName);
-void UpdateAnimationFrameData(StreamedSkeletonData StreamedSkeleton);
-ERROR_CODE PopulateSkeletonsData(ZEDCamera* cam);
 ERROR_CODE InitCamera(int argc, char **argv);
 FTransform BuildUETransformFromZEDTransform(SL_PoseData& pose);
-StreamedSkeletonData BuildSkeletonsTransformFromZEDObjects(SL_ObjectData objectData, double timestamp);
 
 bool IsConnected = false;
 
 // Streamed Data
 StreamedCameraData StreamedCamera;
-TMap<int, StreamedSkeletonData> StreamedSkeletons;
 
 ///////////////////////////////////////
 ///////////// MAIN ////////////////////
@@ -118,17 +100,6 @@ int main(int argc, char **argv)
 			sl::ERROR_CODE err = StreamedCamera.Cam->Grab(rt_params);
 			if (err == sl::ERROR_CODE::SUCCESS) {
 				UpdateCameraFrameData(StreamedCamera.SubjectName, *StreamedCamera.Cam);
-
-#if ENABLE_OBJECT_DETECTION
-				e = PopulateSkeletonsData(StreamedCamera.Cam);
-				if (e != ERROR_CODE::SUCCESS) {
-					cout << "Error " << e << ", exit program.\n";
-					return EXIT_FAILURE;
-				}
-				for (auto& it : StreamedSkeletons) {
-					UpdateAnimationFrameData(it.Value);
-				}
-#endif
 			}
 			else if (err == sl::ERROR_CODE::END_OF_SVOFILE_REACHED) {
 				std::cout << "End of SVO reached " << std::endl;
@@ -145,9 +116,6 @@ int main(int argc, char **argv)
 	}
 	// Disable positional tracking and close the camera
 	StreamedCamera.Cam->DisableTracking();
-#if ENABLE_OBJECT_DETECTION
-	StreamedCamera.Cam->DisableObjectDetection();
-#endif
 	StreamedCamera.Cam->Close();
 
 	LiveLinkProvider.Reset();
@@ -215,100 +183,7 @@ ERROR_CODE InitCamera(int argc, char **argv)
 		std::cout << " ERROR : Enable Tracking" << std::endl;
 		return err;
 	}
-
-#if ENABLE_OBJECT_DETECTION
-	SL_ObjectDetectionParameters obj_det_params;
-	obj_det_params.enable_body_fitting = true;
-	obj_det_params.enable_tracking = true;
-	obj_det_params.model = sl::DETECTION_MODEL::HUMAN_BODY_ACCURATE;
-	obj_det_params.body_format = sl::BODY_FORMAT::POSE_34;
-	obj_det_params.max_range = 5 * 100;
-	err = zed->EnableObjectDetection(obj_det_params);
-	if (err != ERROR_CODE::SUCCESS)
-	{
-		std::cout << "ERROR : Enable OD" << std::endl;
-		return err;
-	}
-#endif
 	return err;
-}
-
-StreamedSkeletonData BuildSkeletonsTransformFromZEDObjects(SL_ObjectData objectData, double timestamp)
-{
-	StreamedSkeletonData SkeletonsData = StreamedSkeletonData(FName(FString::FromInt(objectData.id)));
-	SkeletonsData.Timestamp = timestamp;
-	TMap<FString, FTransform> rigBoneTarget;
-	sl::float3 bodyPosition = objectData.keypoint[0];
-	sl::float4 bodyRotation = objectData.global_root_orientation;
-
-	for (int i = 0; i < targetBone.Num(); i++)
-	{
-		rigBoneTarget.Add(targetBone[i], FTransform::Identity);
-	}
-
-	rigBoneTarget["PELVIS"].SetLocation(FVector(bodyPosition.x, bodyPosition.y, bodyPosition.z));
-	rigBoneTarget["PELVIS"].SetRotation(FQuat(bodyRotation.x, bodyRotation.y, bodyRotation.z, bodyRotation.w));
-
-	for (int i = 1; i < targetBone.Num(); i++)
-	{
-		sl::float3 localTranslation = objectData.local_position_per_joint[i];
-		sl::float4 localRotation = objectData.local_orientation_per_joint[i];
-
-		rigBoneTarget[targetBone[i]].SetLocation(FVector(localTranslation.x, localTranslation.y, localTranslation.z));
-		rigBoneTarget[targetBone[i]].SetRotation(FQuat(localRotation.x, localRotation.y, localRotation.z, localRotation.w));
-	}
-
-	TArray<FTransform> transforms;
-	for (int i = 0; i < targetBone.Num(); i++)
-	{
-		transforms.Push(rigBoneTarget[targetBone[i]]);
-	}
-	SkeletonsData.Skeleton = transforms;
-	return SkeletonsData;
-}
-
-ERROR_CODE PopulateSkeletonsData(ZEDCamera* zed)
-{
-	ERROR_CODE e = ERROR_CODE::FAILURE;
-	SL_ObjectDetectionRuntimeParameters objectTracker_parameters_rt;
-	objectTracker_parameters_rt.object_confidence_threshold[(int)sl::OBJECT_CLASS::PERSON] = 70;
-	SL_Objects bodies;
-	e = zed->RetrieveObjects(objectTracker_parameters_rt, bodies);
-	if (e != ERROR_CODE::SUCCESS)
-	{
-		cout << "ERROR : retrieve objects : " << e << std::endl;
-		return e;
-	}
-	if (bodies.is_new == 1)
-	{
-		TArray<int> remainingKeyList;
-		StreamedSkeletons.GetKeys(remainingKeyList);
-
-		for (int i = 0; i < bodies.nb_object; i++)
-		{
-			SL_ObjectData objectData = bodies.object_list[i];
-			if (objectData.tracking_state == sl::OBJECT_TRACKING_STATE::OK)
-			{
-				if (!StreamedSkeletons.Contains(objectData.id))  // If it's a new ID
-				{
-					UpdateSkeletonStaticData(FName(FString::FromInt(objectData.id)));
-					StreamedSkeletonData data = BuildSkeletonsTransformFromZEDObjects(objectData, bodies.image_ts);
-					StreamedSkeletons.Add(objectData.id, data);
-				}
-				else
-				{
-					StreamedSkeletons[objectData.id] = BuildSkeletonsTransformFromZEDObjects(objectData, bodies.image_ts);
-					remainingKeyList.Remove(objectData.id);
-				}
-			}
-		}
-		for (int index = 0; index < remainingKeyList.Num(); index++)
-		{
-			LiveLinkProvider->RemoveSubject(FName(FString::FromInt(remainingKeyList[index])));
-			StreamedSkeletons.Remove(remainingKeyList[index]);
-		}
-	}
-	return e;
 }
 
 //// Update Camera static data
@@ -353,20 +228,6 @@ void UpdateSkeletonStaticData(FName SubjectName)
 	}
 
 	LiveLinkProvider->UpdateSubjectStaticData(SubjectName, ULiveLinkAnimationRole::StaticClass(), MoveTemp(StaticData));
-}
-
-//// Update Skeleton frame data
-void UpdateAnimationFrameData(StreamedSkeletonData StreamedSkeleton)
-{
-	FLiveLinkFrameDataStruct FrameData(FLiveLinkAnimationFrameData::StaticStruct());
-	FLiveLinkAnimationFrameData& AnimationData = *FrameData.Cast<FLiveLinkAnimationFrameData>();
-
-	double timestamp = (StreamedSkeleton.Timestamp / 1000000000.0f);// ns to seconds
-	double StreamTime = FPlatformTime::Seconds();
-	AnimationData.WorldTime = StreamTime;
-	AnimationData.Transforms = StreamedSkeleton.Skeleton;
-	LiveLinkProvider->UpdateSubjectFrameData(StreamedSkeleton.SubjectName, MoveTemp(FrameData));
-
 }
 
 void parseArgs(int argc, char **argv, SL_InitParameters& param, string& pathSVO, string& ip, int& port)

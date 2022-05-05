@@ -40,7 +40,8 @@ public class ZEDLiveLink : ModuleRules
         LoadZEDSDK(Target, ZEDSDKPath);
         LoadCUDA(Target, CudaSDKPath);
         LoadWrapper(Target, WrapperPath);
-    }
+
+	}
 
     public void LoadZEDSDK(ReadOnlyTargetRules Target, string DirPath)
     {
@@ -58,12 +59,13 @@ public class ZEDLiveLink : ModuleRules
 
             PrivateIncludePaths.Add(Path.Combine(DirPath, "include"));
 
-            foreach (string Library in LibrariesNames)
+			PublicAdditionalLibraries.Add(Path.Combine(DirPath, "lib", "sl_zed64.lib"));
+			/*foreach (string Library in LibrariesNames)
             {
                 PublicAdditionalLibraries.Add(Library);
-            }
-        }
-        else if (Target.Platform == UnrealTargetPlatform.Linux)
+            }*/
+		}
+		else if (Target.Platform == UnrealTargetPlatform.Linux)
         {
             if (!Directory.Exists(DirPath))
             {
@@ -81,12 +83,6 @@ public class ZEDLiveLink : ModuleRules
             {
                 PublicAdditionalLibraries.Add(Library);
             }
-        }
-        else if (Target.Platform == UnrealTargetPlatform.Win32)
-        {
-            string Err = string.Format("Attempt to build against ZED SDK on unsupported platform {0}", Target.Platform);
-            System.Console.WriteLine(Err);
-            throw new BuildException(Err);
         }
     }
 
@@ -131,12 +127,6 @@ public class ZEDLiveLink : ModuleRules
                 if (Library != Path.Combine(DirPath, "lib64/libnvrtc.so") && Library != Path.Combine(DirPath, "lib64/libOpenCL.so")) PublicAdditionalLibraries.Add(Library);
             }
         }
-        else if (Target.Platform == UnrealTargetPlatform.Win32)
-        {
-            string Err = string.Format("Attempt to build against CUDA on unsupported platform {0}", Target.Platform);
-            System.Console.WriteLine(Err);
-            throw new BuildException(Err);
-        }
     }
 
     public void LoadWrapper(ReadOnlyTargetRules Target, string DirPath)
@@ -149,8 +139,7 @@ public class ZEDLiveLink : ModuleRules
                 System.Console.WriteLine(Err);
                 throw new BuildException(Err);
             }
-
-            RuntimeDependencies.Add("$(TargetOutputDir)/sl_zed_c.dll", Path.Combine(DirPath + "/win64/sl_zed_c.dll"));
+			RuntimeDependencies.Add("$(TargetOutputDir)/sl_zed_c.dll", Path.Combine(DirPath + "/win64/sl_zed_c.dll"));
         }
         else if (Target.Platform == UnrealTargetPlatform.Linux)
         {
