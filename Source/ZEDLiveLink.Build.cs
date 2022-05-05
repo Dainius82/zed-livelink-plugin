@@ -149,7 +149,7 @@ public class ZEDLiveLink : ModuleRules
                 System.Console.WriteLine(Err);
                 throw new BuildException(Err);
             }
-		
+
 		    PublicAdditionalLibraries.Add(DirPath + "/linux/libsl_zed_c.so");
 
             RuntimeDependencies.Add("$(TargetOutputDir)/ZEDLiveLink/libsl_zed_c.so", Path.Combine(DirPath + "/linux/libsl_zed_c.so"));

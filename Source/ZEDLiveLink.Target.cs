@@ -95,9 +95,12 @@ public class ZEDLiveLinkTarget : TargetRules
 		string OutputName = LaunchModuleName;
 
 		string PostBuildBinDir = Path.Combine(DefaultBinDir, "ZEDLiveLink");
+		if (Target.Platform.ToString() == "Win64")
+		{
 		// Copy binaries
 		PostBuildSteps.Add(string.Format("echo Copying {0} to {1}...", EngineBinariesDir, PostBuildBinDir));
 		PostBuildSteps.Add(string.Format("xcopy /y /i /v \"{0}\\{1}.*\" \"{2}\" 1>nul", EngineBinariesDir, OutputName, PostBuildBinDir));
 		PostBuildSteps.Add(string.Format("xcopy /y /i /v \"{0}\\{1}.*\" \"{2}\" 1>nul", EngineBinariesDir, "sl_zed_c", PostBuildBinDir));
+		}
 	}
 }
