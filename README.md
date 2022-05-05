@@ -1,6 +1,9 @@
 # Stereolabs ZED - Live Link Plugin
 ZED LiveLink Plugin for Unreal
 
+Mininal version that only send camera tracking data.
+Used for virtual production applications.
+
 ## ZED Live Link tool
 
 This tool is using the Live Link plugin to connect Unreal engine 4 to the ZED SDK, which enables you to send skeleton tracking data to UE4. This way, you can control a Skeletal Mesh in real-time using the Skeleton tracking module of the ZED SDK.
