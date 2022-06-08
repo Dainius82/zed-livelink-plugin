@@ -74,7 +74,16 @@ FTransform BuildUETransformFromZEDTransform(SL_PoseData& pose);
 StreamedSkeletonData BuildSkeletonsTransformFromZEDObjects(SL_ObjectData objectData, double timestamp);
 
 bool IsConnected = false;
-
+int minDistX;
+int maxDistX;
+int minDistY;
+int maxDistY;
+int posX;
+int posY;
+int radius;
+bool alreadyTracking = false;
+int CurrendID;
+FString CamId;
 // Streamed Data 
 StreamedCameraData StreamedCamera;
 TMap<int, StreamedSkeletonData> StreamedSkeletons;
@@ -88,7 +97,7 @@ int main(int argc, char **argv)
 	std::cout << "Starting ZEDLiveLink tool" << endl;
 	cout << "Opening camera..." << endl;
 	LibInit();
-	LiveLinkProvider = ILiveLinkProvider::CreateLiveLinkProvider(TEXT("ZED"));
+	LiveLinkProvider = ILiveLinkProvider::CreateLiveLinkProvider(TEXT("ZED_1"));
 	//// Create camera
 	ERROR_CODE e = InitCamera(argc, argv);
 	if (e != ERROR_CODE::SUCCESS) {
@@ -108,7 +117,9 @@ int main(int argc, char **argv)
 			if (!IsConnected) {
 				IsConnected = true;
 				cout << "ZEDLiveLink is connected " << endl;
-				cout << "ZED Camera added : " << TCHAR_TO_UTF8(*StreamedCamera.SubjectName.ToString()) << endl;
+				//CamId = StreamedCamera.SubjectName.ToString();
+				CamId = FString("Left");
+				cout << "ZED Camera added : " << TCHAR_TO_UTF8(*CamId) << endl;
 			}
 
 			// Grab
@@ -188,8 +199,8 @@ ERROR_CODE InitCamera(int argc, char **argv)
 		return sl::ERROR_CODE::FAILURE;
 	}
 	SL_InitParameters init_params;
-	init_params.resolution = sl::RESOLUTION::HD1080;
-	init_params.camera_fps = 30;
+	init_params.resolution = sl::RESOLUTION::HD720;
+	init_params.camera_fps = 60;
 	init_params.coordinate_system = sl::COORDINATE_SYSTEM::LEFT_HANDED_Z_UP;
 	init_params.coordinate_unit = sl::UNIT::CENTIMETER;
 	init_params.depth_mode = DEPTH_MODE::ULTRA;
@@ -242,6 +253,16 @@ StreamedSkeletonData BuildSkeletonsTransformFromZEDObjects(SL_ObjectData objectD
 	sl::float3 bodyPosition = objectData.keypoint[0];
 	sl::float4 bodyRotation = objectData.global_root_orientation;
 
+	
+
+	std::cout << "X: " + to_string(objectData.position.x) + " Y: " + to_string(objectData.position.y) + " Distances: " + to_string(minDistX) + "," + to_string(maxDistX) + "," + to_string(minDistY) + "," + to_string(maxDistY) << endl;
+
+	//if (objectData.position.x >= 100)
+   // {
+//		std::cout << "xxx" << endl;
+//	}
+
+
 	for (int i = 0; i < targetBone.Num(); i++)
 	{
 		rigBoneTarget.Add(targetBone[i], FTransform::Identity);
@@ -280,21 +301,33 @@ ERROR_CODE PopulateSkeletonsData(ZEDCamera* zed)
 		cout << "ERROR : retrieve objects : " << e << std::endl;
 		return e;
 	}
+
+	//std::cout << "No of Objects: " << bodies.nb_object << " Current tracked ID: " << CurrendID << endl;
+
 	if (bodies.is_new == 1)
 	{
 		TArray<int> remainingKeyList;
 		StreamedSkeletons.GetKeys(remainingKeyList);
-	
+
 		for (int i = 0; i < bodies.nb_object; i++)
 		{
 			SL_ObjectData objectData = bodies.object_list[i];
-			if (objectData.tracking_state == sl::OBJECT_TRACKING_STATE::OK)
+
+			//std::cout << "Object ID: " << i << " PosX: " << objectData.position.x << "PosY: " << objectData.position.y << endl;
+
+		   if (objectData.tracking_state == sl::OBJECT_TRACKING_STATE::OK && objectData.position.x >= minDistX && objectData.position.x <= maxDistX && objectData.position.y >= minDistY && objectData.position.y <= maxDistY)
+			//if (objectData.tracking_state == sl::OBJECT_TRACKING_STATE::OK )
 			{
 				if (!StreamedSkeletons.Contains(objectData.id))  // If it's a new ID
 				{
-					UpdateSkeletonStaticData(FName(FString::FromInt(objectData.id)));
+					UpdateSkeletonStaticData(FName(CamId + "_" + FString::FromInt(objectData.id)));
 					StreamedSkeletonData data = BuildSkeletonsTransformFromZEDObjects(objectData, bodies.image_ts);
-					StreamedSkeletons.Add(objectData.id, data);
+
+					if (bodies.nb_object <= 1) // Add body only if there are no bodies, limits to ony one body at the time.
+					{
+						StreamedSkeletons.Add(objectData.id, data);
+						CurrendID = objectData.id;
+					}
 				}
 				else
 				{
@@ -305,7 +338,7 @@ ERROR_CODE PopulateSkeletonsData(ZEDCamera* zed)
 		}
 		for (int index = 0; index < remainingKeyList.Num(); index++)
 		{
-			LiveLinkProvider->RemoveSubject(FName(FString::FromInt(remainingKeyList[index])));
+			LiveLinkProvider->RemoveSubject(FName(CamId + "_" + FString::FromInt(remainingKeyList[index])));
 			StreamedSkeletons.Remove(remainingKeyList[index]);
 		}
 	}
@@ -366,51 +399,67 @@ void UpdateAnimationFrameData(StreamedSkeletonData StreamedSkeleton)
 	double StreamTime = FPlatformTime::Seconds();
 	AnimationData.WorldTime = StreamTime;
 	AnimationData.Transforms = StreamedSkeleton.Skeleton;
-	LiveLinkProvider->UpdateSubjectFrameData(StreamedSkeleton.SubjectName, MoveTemp(FrameData));
+	FString  newSubjectName = CamId + "_" + StreamedSkeleton.SubjectName.ToString();
+	LiveLinkProvider->UpdateSubjectFrameData(FName(*newSubjectName), MoveTemp(FrameData));
 
 }
 
 
 void parseArgs(int argc, char **argv, SL_InitParameters& param, string& pathSVO, string& ip, int& port)
 {
+
+	sscanf(argv[2], "%u,%u,%u", &posX, &posY, &radius);
+	
+	minDistX = posX - radius;
+	maxDistX = posX + radius;
+	minDistY = posY - radius;
+	maxDistY = posY + radius;
+
+	cout << "Active Zone Version 1.0"<< endl;
+    cout << "Using active zone at : " << to_string(posX) + "," + to_string(posY) + "," + to_string(radius)<< endl;
+	
 	if (argc > 1 && string(argv[1]).find(".svo") != string::npos) {
 		// SVO input mode
 		param.input_type = sl::INPUT_TYPE::SVO;
 		pathSVO = string(argv[1]);
-		cout << "[Sample] Using SVO File input: " << argv[1] << endl;
+		cout << "Using SVO File input: " << argv[1] << endl;
 	}
 	else if (argc > 1 && string(argv[1]).find(".svo") == string::npos) {
 		string arg = string(argv[1]);
+		
 		unsigned int a, b, c, d, p;
+
 		if (sscanf(arg.c_str(), "%u.%u.%u.%u:%d", &a, &b, &c, &d, &p) == 5) {
 			// Stream input mode - IP + port
 			string ip_adress = to_string(a) + "." + to_string(b) + "." + to_string(c) + "." + to_string(d);
 			param.input_type = sl::INPUT_TYPE::STREAM;
 			ip = string(ip_adress);
 			port = p;
-			cout << "[Sample] Using Stream input, IP : " << ip_adress << ", port : " << p << endl;
+			cout << "Using Stream input, IP : " << ip_adress << ", port : " << p << endl;
 		}
 		else if (sscanf(arg.c_str(), "%u.%u.%u.%u", &a, &b, &c, &d) == 4) {
 			// Stream input mode - IP only
 			param.input_type = sl::INPUT_TYPE::STREAM;
 			ip = argv[1];
-			cout << "[Sample] Using Stream input, IP : " << argv[1] << endl;
+			cout << "Using Stream input, IP : " << argv[1] << endl;
 		}
 		else if (arg.find("HD2K") != string::npos) {
 			param.resolution = RESOLUTION::HD2K;
-			cout << "[Sample] Using Camera in resolution HD2K" << endl;
+			cout << "Using Camera in resolution HD2K" << endl;
 		}
 		else if (arg.find("HD1080") != string::npos) {
 			param.resolution = RESOLUTION::HD1080;
-			cout << "[Sample] Using Camera in resolution HD1080" << endl;
+			cout << "Using Camera in resolution HD1080" << endl;
 		}
 		else if (arg.find("HD720") != string::npos) {
 			param.resolution = RESOLUTION::HD720;
-			cout << "[Sample] Using Camera in resolution HD720" << endl;
+			cout << "Using Camera in resolution HD720" << endl;
 		}
 		else if (arg.find("VGA") != string::npos) {
 			param.resolution = RESOLUTION::VGA;
-			cout << "[Sample] Using Camera in resolution VGA" << endl;
+			cout << "Using Camera in resolution VGA" << endl;
 		}
+		
+
 	}
 }
