@@ -84,6 +84,7 @@ int radius;
 bool alreadyTracking = false;
 int CurrendID;
 FString CamId;
+bool occupied = false;
 // Streamed Data 
 StreamedCameraData StreamedCamera;
 TMap<int, StreamedSkeletonData> StreamedSkeletons;
@@ -94,10 +95,12 @@ TMap<int, StreamedSkeletonData> StreamedSkeletons;
 
 int main(int argc, char **argv)
 {
+	CamId = FString(argv[3]);
+
 	std::cout << "Starting ZEDLiveLink tool" << endl;
 	cout << "Opening camera..." << endl;
 	LibInit();
-	LiveLinkProvider = ILiveLinkProvider::CreateLiveLinkProvider(TEXT("ZED_1"));
+	LiveLinkProvider = ILiveLinkProvider::CreateLiveLinkProvider(TEXT("ZED_") + CamId);
 	//// Create camera
 	ERROR_CODE e = InitCamera(argc, argv);
 	if (e != ERROR_CODE::SUCCESS) {
@@ -118,7 +121,6 @@ int main(int argc, char **argv)
 				IsConnected = true;
 				cout << "ZEDLiveLink is connected " << endl;
 				//CamId = StreamedCamera.SubjectName.ToString();
-				CamId = FString("Left");
 				cout << "ZED Camera added : " << TCHAR_TO_UTF8(*CamId) << endl;
 			}
 
@@ -253,16 +255,6 @@ StreamedSkeletonData BuildSkeletonsTransformFromZEDObjects(SL_ObjectData objectD
 	sl::float3 bodyPosition = objectData.keypoint[0];
 	sl::float4 bodyRotation = objectData.global_root_orientation;
 
-	
-
-	std::cout << "X: " + to_string(objectData.position.x) + " Y: " + to_string(objectData.position.y) + " Distances: " + to_string(minDistX) + "," + to_string(maxDistX) + "," + to_string(minDistY) + "," + to_string(maxDistY) << endl;
-
-	//if (objectData.position.x >= 100)
-   // {
-//		std::cout << "xxx" << endl;
-//	}
-
-
 	for (int i = 0; i < targetBone.Num(); i++)
 	{
 		rigBoneTarget.Add(targetBone[i], FTransform::Identity);
@@ -302,44 +294,52 @@ ERROR_CODE PopulateSkeletonsData(ZEDCamera* zed)
 		return e;
 	}
 
-	//std::cout << "No of Objects: " << bodies.nb_object << " Current tracked ID: " << CurrendID << endl;
-
+	//std::cout << "No of Objects: " << bodies.nb_object << " Current tracked ID: " << CurrendID << "Occupied: " << occupied << endl;
+	
 	if (bodies.is_new == 1)
 	{
 		TArray<int> remainingKeyList;
 		StreamedSkeletons.GetKeys(remainingKeyList);
+		
 
 		for (int i = 0; i < bodies.nb_object; i++)
 		{
 			SL_ObjectData objectData = bodies.object_list[i];
-
-			//std::cout << "Object ID: " << i << " PosX: " << objectData.position.x << "PosY: " << objectData.position.y << endl;
-
-		   if (objectData.tracking_state == sl::OBJECT_TRACKING_STATE::OK && objectData.position.x >= minDistX && objectData.position.x <= maxDistX && objectData.position.y >= minDistY && objectData.position.y <= maxDistY)
-			//if (objectData.tracking_state == sl::OBJECT_TRACKING_STATE::OK )
+		
+			if (objectData.tracking_state == sl::OBJECT_TRACKING_STATE::OK && objectData.position.x >= minDistX && objectData.position.x <= maxDistX && objectData.position.y >= minDistY && objectData.position.y <= maxDistY) // Detect if object has entered the active zone
 			{
-				if (!StreamedSkeletons.Contains(objectData.id))  // If it's a new ID
+				std::cout << "Object: " << objectData.id << " X: " + to_string(objectData.position.x) + " Y: " + to_string(objectData.position.y) + " L Hand Z: " + to_string(objectData.position.y) << " IN" << " Current ID: " << CurrendID<< endl;
+			
+				if (!StreamedSkeletons.Contains(objectData.id) && !occupied)  // If it's a new ID and zone is not occupied, add new object and set occupancy
+				
 				{
+					occupied = true;
+					CurrendID = objectData.id;
 					UpdateSkeletonStaticData(FName(CamId + "_" + FString::FromInt(objectData.id)));
 					StreamedSkeletonData data = BuildSkeletonsTransformFromZEDObjects(objectData, bodies.image_ts);
-
-					if (bodies.nb_object <= 1) // Add body only if there are no bodies, limits to ony one body at the time.
-					{
-						StreamedSkeletons.Add(objectData.id, data);
-						CurrendID = objectData.id;
-					}
+					StreamedSkeletons.Add(objectData.id, data);
 				}
-				else
+
+				else if(occupied && objectData.id == CurrendID) //if new object added and zone occpied with current id, stream data
 				{
 					StreamedSkeletons[objectData.id] = BuildSkeletonsTransformFromZEDObjects(objectData, bodies.image_ts);
 					remainingKeyList.Remove(objectData.id);
+
 				}
 			}
+
+			else if(objectData.id == CurrendID) // reset occupancy if current object has exited active zone
+			{
+				std::cout << "Object: " << objectData.id << " X: " + to_string(objectData.position.x) + " Y: " + to_string(objectData.position.y) << " OUT" << endl;
+				occupied = false;
+			}
+		  
 		}
 		for (int index = 0; index < remainingKeyList.Num(); index++)
 		{
 			LiveLinkProvider->RemoveSubject(FName(CamId + "_" + FString::FromInt(remainingKeyList[index])));
 			StreamedSkeletons.Remove(remainingKeyList[index]);
+			
 		}
 	}
 	return e;
@@ -415,7 +415,9 @@ void parseArgs(int argc, char **argv, SL_InitParameters& param, string& pathSVO,
 	minDistY = posY - radius;
 	maxDistY = posY + radius;
 
-	cout << "Active Zone Version 1.0"<< endl;
+	//CamId = FString(argv[3]);
+
+	cout << "Active Zone Version 2.0"<< endl;
     cout << "Using active zone at : " << to_string(posX) + "," + to_string(posY) + "," + to_string(radius)<< endl;
 	
 	if (argc > 1 && string(argv[1]).find(".svo") != string::npos) {
@@ -424,6 +426,7 @@ void parseArgs(int argc, char **argv, SL_InitParameters& param, string& pathSVO,
 		pathSVO = string(argv[1]);
 		cout << "Using SVO File input: " << argv[1] << endl;
 	}
+
 	else if (argc > 1 && string(argv[1]).find(".svo") == string::npos) {
 		string arg = string(argv[1]);
 		
@@ -459,6 +462,7 @@ void parseArgs(int argc, char **argv, SL_InitParameters& param, string& pathSVO,
 			param.resolution = RESOLUTION::VGA;
 			cout << "Using Camera in resolution VGA" << endl;
 		}
+		
 		
 
 	}
